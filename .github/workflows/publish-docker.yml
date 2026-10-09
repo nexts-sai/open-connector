@@ -3,7 +3,13 @@ name: Publish Docker Image
 on:
   push:
     branches: [main]
+    tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version tag to publish, for example v0.1.0
+        required: false
+        type: string
   workflow_call:
     inputs:
       release_tag:
@@ -36,6 +42,30 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
+      - name: Resolve release version
+        id: release
+        shell: bash
+        env:
+          CALLED_VERSION: ${{ inputs.release_tag }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          release_version=""
+          if [[ -n "$CALLED_VERSION" ]]; then
+            release_version="$CALLED_VERSION"
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            release_version="$GITHUB_REF_NAME"
+          elif [[ -n "$MANUAL_VERSION" ]]; then
+            release_version="$MANUAL_VERSION"
+          fi
+          if [[ -n "$release_version" ]]; then
+            [[ "$release_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+              echo "Invalid release version: $release_version" >&2
+              exit 1
+            }
+          fi
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -53,10 +83,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: latest=false
           tags: |
-            type=raw,value=tip,enable=${{ inputs.release_tag == '' }}
-            type=sha,prefix=,format=short,enable=${{ inputs.release_tag == '' }}
-            type=raw,value=latest,enable=${{ inputs.release_tag != '' }}
-            type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
+            type=raw,value=tip,enable=${{ steps.release.outputs.version == '' }}
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable=${{ steps.release.outputs.version != '' }}
+            type=raw,value=${{ steps.release.outputs.version }},enable=${{ steps.release.outputs.version != '' }}
 
       - name: Build and push image
         uses: docker/build-push-action@v6

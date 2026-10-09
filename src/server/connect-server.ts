@@ -295,6 +295,9 @@ export class ConnectServer {
 
     app.get("/api/connections", (context) => this.listConnections(context));
     app.put("/api/connections/:service", (context) => this.upsertConnection(context, context.req.param("service")));
+    app.put("/api/internal/connections/:service/oauth2", (context) =>
+      this.upsertInternalOAuthConnection(context, context.req.param("service")),
+    );
     app.delete("/api/connections/:service", (context) => this.disconnect(context, context.req.param("service")));
 
     app.get("/api/runs", (context) => this.listRuns(context));
@@ -1199,6 +1202,44 @@ export class ConnectServer {
       "connection rejected",
     );
     return jsonError(context, 400, "unsupported_auth_type", `${service} does not support ${authType}.`);
+  }
+
+  private async upsertInternalOAuthConnection(context: Context, service: string): Promise<Response> {
+    const body = await readJsonBody(context);
+    const connectionName = readConnectionName(context, body);
+    const credential = optionalRecord(body.credential);
+    const profile = optionalRecord(credential?.profile);
+    const metadata = optionalRecord(credential?.metadata);
+    const accessToken = optionalString(credential?.accessToken);
+    const tokenType = optionalString(credential?.tokenType);
+    const accountId = optionalString(profile?.accountId);
+    const displayName = optionalString(profile?.displayName);
+    const grantedScopes = profile?.grantedScopes;
+    if (
+      credential?.authType !== "oauth2" ||
+      !accessToken ||
+      !tokenType ||
+      !accountId ||
+      !displayName ||
+      !Array.isArray(grantedScopes) ||
+      !grantedScopes.every((scope): scope is string => typeof scope === "string") ||
+      !metadata
+    ) {
+      return jsonError(context, 400, "invalid_input", "A resolved OAuth credential is required.");
+    }
+    const summary = await this.options.connections.setOAuthCredential(
+      service,
+      {
+        authType: "oauth2",
+        accessToken,
+        tokenType,
+        expiresAt: optionalString(credential.expiresAt),
+        profile: { accountId, displayName, grantedScopes },
+        metadata,
+      },
+      connectionName,
+    );
+    return context.json(summary);
   }
 
   private async disconnect(context: Context, service: string): Promise<Response> {
